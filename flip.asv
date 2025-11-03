@@ -1,0 +1,153 @@
+% Numerical example for the forward-Euler map of the (N,P,R) system
+% illustrating a flip (period-doubling) bifurcation.
+
+clear; clc; close all;
+
+%% Parameters (same as before, with βδ > ε)
+alpha = 0.8;
+beta  = 2.0;
+delta = 1.0;
+epsilon = 0.6; % gamma2
+
+%% Compute gamma1+
+disc_inside = (epsilon - alpha*delta)^2 + (alpha/beta)*(beta*delta + epsilon)^2;
+gamma1_plus = ((epsilon - alpha*delta) + sqrt(disc_inside)) / 2;
+
+% Choose gamma in (epsilon, gamma1+)
+gamma = 0.65;
+
+%% Coefficients of quadratic c1 R^2 + c2 R + c3 = 0
+c1 = gamma + alpha*delta - epsilon;
+c2 = -alpha*(beta*delta + epsilon);
+c3 = alpha*beta*gamma;
+
+roots_R = roots([c1, c2, c3]);
+roots_R = roots_R(imag(roots_R) == 0);  % keep real
+R_candidates = roots_R(roots_R > 0 & roots_R < beta);
+
+%% Steady state values
+Nstar = @(R) alpha*R.*(beta - R)./(R.^2 + alpha*beta);
+Pstar = @(R) R.*(R + alpha)./(R.^2 + alpha*beta);
+
+R_star = max(R_candidates);
+N_star = Nstar(R_star);
+P_star = Pstar(R_star);
+
+%% Jacobian at (N*,P*,R*)
+J11 = 1 - 2*N_star/R_star - P_star;
+J12 = -N_star;
+J13 = (N_star^2)/(R_star^2);
+J21 = P_star;
+J22 = alpha*(1 - 2*beta*P_star/R_star) + N_star;
+J23 = alpha*beta*P_star^2/(R_star^2);
+J31 = -delta*R_star;
+J32 = -epsilon*R_star;
+J33 = gamma - delta*N_star - epsilon*P_star;
+
+J = [J11 J12 J13; J21 J22 J23; J31 J32 J33];
+lambda = eig(J);
+
+%% Compute critical Δτ for flip (period-doubling) or Neimark–Sacker
+delta_tau_candidates = [];
+for k = 1:length(lambda)
+    ev = lambda(k);
+    if abs(imag(ev)) < 1e-12
+        a = real(ev);
+        if a < 0
+            delta_tau_candidates(end+1) = -2.0 / a; 
+        end
+    else
+        a = real(ev); b = imag(ev);
+        if a < 0
+            delta_tau_candidates(end+1) = -2.0*a / (a^2 + b^2); 
+        end
+    end
+end
+dt_crit = min(delta_tau_candidates);
+
+fprintf('Critical Δτ ≈ %.4f\n', dt_crit);
+
+%% Define the ODE right-hand side
+F = @(N,P,R) deal( ...
+    N.*(1 - N./R) - N.*P, ...
+    alpha*P.*(1 - beta*P./R) + N.*P, ...
+    R.*(gamma - delta*N - epsilon*P) );
+
+%% Euler map
+euler_map = @(X, dt) ...
+    X + dt .* [ ...
+        F(X(1), X(2), X(3)) ...
+    ];
+
+%% Simulate below and above critical Δτ
+dt_below = 0.9 * dt_crit;
+dt_above = 1.1 * dt_crit;
+steps = 800;
+
+traj_below = iterate(dt_below, steps, [], N_star, P_star, R_star, F, alpha, beta, delta, epsilon, gamma);
+traj_above = iterate(dt_above, steps, [], N_star, P_star, R_star, F, alpha, beta, delta, epsilon, gamma);
+
+%% Spectral radius plot
+dts = linspace(0, 2*dt_crit, 200);
+rhos = zeros(size(dts));
+for k = 1:length(dts)
+    mu = eig(eye(3) + dts(k)*J);
+    rhos(k) = max(abs(mu));
+end
+
+
+%% Plot time series for P_n
+defaultsetting;
+colors = lines(2);
+figure('Position',[100 100 900 800]);
+tiledlayout(2,2, 'TileSpacing','tight', 'Padding','tight');
+nexttile;
+
+plot(traj_below(:,1),'DisplayName','$N_n$');hold on;
+plot(traj_below(:,2),'DisplayName','$P_n$'); 
+hold off;
+xlabel('n'); ylabel('$N_n \& P_n$');
+legend('Position','best');
+title('(a)');
+
+nexttile;
+plot(traj_above(:,1),'DisplayName','$N_n');hold on;
+plot(traj_above(:,2), 'LineWidth',1.2);
+hold off;
+xlabel('n'); ylabel('$N_n \& P_n$');
+legend('Position','best');
+title('(b)');
+
+nexttile(3,[1,2]);
+plot(dts, rhos);
+hold on;
+yline(1, 'k-');
+xline(dt_crit, '--');
+hold off;
+xlabel('$\Delta\tau$'); ylabel('$\rho(D\Phi)$');
+title('(c)');
+
+
+drawnow;
+exportgraphics(gcf, 'Figure4.svg', 'Resolution', 600);
+
+%% Print results
+disp('Eigenvalues of J:');
+disp(lambda);
+
+
+%% Iteration function
+function traj = iterate(dt, steps, X0, N_star, P_star, R_star, F, alpha, beta, delta, epsilon, gamma)
+    if nargin < 3 || isempty(X0)
+        X0 = [N_star*0.8; P_star*1.2; R_star*0.9];
+    end
+    traj = zeros(steps, 3);
+    X = X0;
+    for k = 1:steps
+        % prevent division issues
+        X = max(X, 1e-12);
+        [dN, dP, dR] = F(X(1), X(2), X(3));
+        X = X + dt*[dN; dP; dR];
+        traj(k,:) = X;
+    end
+end
